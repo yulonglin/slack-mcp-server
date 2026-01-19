@@ -152,6 +152,38 @@ func getCachePathWithTeamID(teamID, filename string) string {
 	return filepath.Join(cacheDir, filename)
 }
 
+// validateCachePath validates that a cache path is safe and not vulnerable
+// to path traversal attacks. It ensures the resolved path stays within
+// the expected base directory.
+func validateCachePath(cachePath string, baseDir string) (string, error) {
+	// Clean and resolve the cache path
+	cleanPath := filepath.Clean(cachePath)
+	absPath, err := filepath.Abs(cleanPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Clean and resolve the base directory
+	cleanBase := filepath.Clean(baseDir)
+	absBase, err := filepath.Abs(cleanBase)
+	if err != nil {
+		return "", err
+	}
+
+	// Ensure the resolved path is within the base directory
+	relPath, err := filepath.Rel(absBase, absPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Check for path traversal (relative path starting with "..")
+	if strings.HasPrefix(relPath, "..") {
+		return "", errors.New("cache path escapes base directory")
+	}
+
+	return absPath, nil
+}
+
 type UsersCache struct {
 	Users    map[string]slack.User `json:"users"`
 	UsersInv map[string]string     `json:"users_inv"`
@@ -168,6 +200,8 @@ type Channel struct {
 	Topic       string   `json:"topic"`
 	Purpose     string   `json:"purpose"`
 	MemberCount int      `json:"memberCount"`
+	Created     int64    `json:"created"` // Unix timestamp when the channel was created
+	Updated     int64    `json:"updated"` // Unix timestamp when the channel was last updated
 	IsMpIM      bool     `json:"mpim"`
 	IsIM        bool     `json:"im"`
 	IsPrivate   bool     `json:"private"`
@@ -316,7 +350,7 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 }
 
 func (c *MCPSlackClient) AuthTest() (*slack.AuthTestResponse, error) {
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+	if isDemoMode() {
 		return &slack.AuthTestResponse{
 			URL:          "https://_.slack.com",
 			Team:         "Demo Team",
@@ -587,14 +621,32 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
 		usersCache = getCachePathWithTeamID(teamID, "users_cache.json")
+	} else {
+		// Validate user-provided cache path
+		validPath, err := validateCachePath(usersCache, filepath.Dir(usersCache))
+		if err != nil {
+			logger.Fatal("Invalid users cache path",
+				zap.String("path", usersCache),
+				zap.Error(err))
+		}
+		usersCache = validPath
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
 		channelsCache = getCachePathWithTeamID(teamID, "channels_cache_v2.json")
+	} else {
+		// Validate user-provided cache path
+		validPath, err := validateCachePath(channelsCache, filepath.Dir(channelsCache))
+		if err != nil {
+			logger.Fatal("Invalid channels cache path",
+				zap.String("path", channelsCache),
+				zap.Error(err))
+		}
+		channelsCache = validPath
 	}
 
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+	if isDemoMode() {
 		logger.Info("Demo credentials are set, skip.")
 	} else {
 		client, err = NewMCPSlackClient(authProvider, logger)
@@ -647,14 +699,32 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
 		usersCache = getCachePathWithTeamID(teamID, "users_cache.json")
+	} else {
+		// Validate user-provided cache path
+		validPath, err := validateCachePath(usersCache, filepath.Dir(usersCache))
+		if err != nil {
+			logger.Fatal("Invalid users cache path",
+				zap.String("path", usersCache),
+				zap.Error(err))
+		}
+		usersCache = validPath
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
 		channelsCache = getCachePathWithTeamID(teamID, "channels_cache_v2.json")
+	} else {
+		// Validate user-provided cache path
+		validPath, err := validateCachePath(channelsCache, filepath.Dir(channelsCache))
+		if err != nil {
+			logger.Fatal("Invalid channels cache path",
+				zap.String("path", channelsCache),
+				zap.Error(err))
+		}
+		channelsCache = validPath
 	}
 
-	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+	if isDemoMode() {
 		logger.Info("Demo credentials are set, skip.")
 	} else {
 		client, err = NewMCPSlackClient(authProvider, logger)
@@ -820,7 +890,7 @@ func (ap *ApiProvider) refreshUsersInternal(ctx context.Context, force bool) err
 	if data, err := json.MarshalIndent(list, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal users for cache", zap.Error(err))
 	} else {
-		if err := os.WriteFile(ap.usersCachePath, data, 0644); err != nil {
+		if err := os.WriteFile(ap.usersCachePath, data, 0600); err != nil {
 			ap.logger.Error("Failed to write cache file",
 				zap.String("cache_file", ap.usersCachePath),
 				zap.Error(err))
@@ -907,6 +977,7 @@ func (ap *ApiProvider) refreshChannelsInternal(ctx context.Context, force bool) 
 							remappedChannel := mapChannel(
 								c.ID, "", "", c.Topic, c.Purpose,
 								c.User, c.Members, c.MemberCount,
+								c.Created, c.Updated,
 								c.IsIM, c.IsMpIM, c.IsPrivate, c.IsExtShared,
 								usersMap,
 							)
@@ -934,7 +1005,7 @@ func (ap *ApiProvider) refreshChannelsInternal(ctx context.Context, force bool) 
 	if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal channels for cache", zap.Error(err))
 	} else {
-		if err := os.WriteFile(ap.channelsCachePath, data, 0644); err != nil {
+		if err := os.WriteFile(ap.channelsCachePath, data, 0600); err != nil {
 			ap.logger.Error("Failed to write cache file",
 				zap.String("cache_file", ap.channelsCachePath),
 				zap.Error(err))
@@ -1018,6 +1089,13 @@ func (ap *ApiProvider) GetChannelsType(ctx context.Context, channelType string) 
 		}
 
 		for _, channel := range channels {
+			// Use Latest message timestamp for Updated if available
+			var updated int64
+			if channel.Latest != nil && channel.Latest.Timestamp != "" {
+				if ts, err := parseSlackTimestamp(channel.Latest.Timestamp); err == nil {
+					updated = ts
+				}
+			}
 			ch := mapChannel(
 				channel.ID,
 				channel.Name,
@@ -1027,6 +1105,8 @@ func (ap *ApiProvider) GetChannelsType(ctx context.Context, channelType string) 
 				channel.User,
 				channel.Members,
 				channel.NumMembers,
+				int64(channel.Created),
+				updated,
 				channel.IsIM,
 				channel.IsMpIM,
 				channel.IsPrivate,
@@ -1176,6 +1256,7 @@ func mapChannel(
 	id, name, nameNormalized, topic, purpose, user string,
 	members []string,
 	numMembers int,
+	created, updated int64,
 	isIM, isMpIM, isPrivate, isExtShared bool,
 	usersMap map[string]slack.User,
 ) Channel {
@@ -1237,6 +1318,8 @@ func mapChannel(
 		Topic:       finalTopic,
 		Purpose:     finalPurpose,
 		MemberCount: finalMemberCount,
+		Created:     created,
+		Updated:     updated,
 		IsIM:        isIM,
 		IsMpIM:      isMpIM,
 		IsPrivate:   isPrivate,
@@ -1244,4 +1327,16 @@ func mapChannel(
 		User:        userID,
 		Members:     members,
 	}
+}
+
+// parseSlackTimestamp parses a Slack timestamp string (e.g., "1234567890.123456")
+// and returns Unix timestamp in seconds as int64.
+func parseSlackTimestamp(ts string) (int64, error) {
+	// Slack timestamps are in the format "seconds.microseconds"
+	// We only need the seconds part for sorting
+	parts := strings.Split(ts, ".")
+	if len(parts) == 0 {
+		return 0, errors.New("invalid timestamp format")
+	}
+	return strconv.ParseInt(parts[0], 10, 64)
 }

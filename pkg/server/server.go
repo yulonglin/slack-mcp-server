@@ -358,7 +358,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger, enabledToo
 				mcp.Description("Comma-separated channel types. Allowed values: 'mpim', 'im', 'public_channel', 'private_channel'. Example: 'public_channel,private_channel,im'"),
 			),
 			mcp.WithString("sort",
-				mcp.Description("Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel."),
+				mcp.Description("Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel, 'recency' - sort by last update time (most recently updated first)."),
 			),
 			mcp.WithNumber("limit",
 				mcp.DefaultNumber(100),

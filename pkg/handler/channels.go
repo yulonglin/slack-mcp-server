@@ -21,6 +21,8 @@ type Channel struct {
 	Topic       string `json:"topic"`
 	Purpose     string `json:"purpose"`
 	MemberCount int    `json:"memberCount"`
+	Created     int64  `json:"created"`
+	Updated     int64  `json:"updated"`
 	Cursor      string `json:"cursor"`
 }
 
@@ -182,6 +184,8 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 			Topic:       channel.Topic,
 			Purpose:     channel.Purpose,
 			MemberCount: channel.MemberCount,
+			Created:     channel.Created,
+			Updated:     channel.Updated,
 		})
 	}
 
@@ -190,6 +194,20 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 		ch.logger.Debug("Sorting channels by popularity (member count)")
 		sort.Slice(channelList, func(i, j int) bool {
 			return channelList[i].MemberCount > channelList[j].MemberCount
+		})
+	case "recency":
+		ch.logger.Debug("Sorting channels by recency (most recently updated first)")
+		sort.Slice(channelList, func(i, j int) bool {
+			// Use Updated if available, fall back to Created
+			ti := channelList[i].Updated
+			if ti == 0 {
+				ti = channelList[i].Created
+			}
+			tj := channelList[j].Updated
+			if tj == 0 {
+				tj = channelList[j].Created
+			}
+			return ti > tj
 		})
 	default:
 		ch.logger.Debug("No sorting applied", zap.String("sort_type", sortType))

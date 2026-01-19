@@ -81,7 +81,7 @@ Search messages in a public channel, private channel, or direct message (DM, or 
 Get list of channels
 - **Parameters:**
   - `channel_types` (string, required): Comma-separated channel types. Allowed values: `mpim`, `im`, `public_channel`, `private_channel`. Example: `public_channel,private_channel,im`
-  - `sort` (string, optional): Type of sorting. Allowed values: `popularity` - sort by number of members/participants in each channel.
+  - `sort` (string, optional): Type of sorting. Allowed values: `popularity` - sort by number of members/participants in each channel, `recency` - sort by last update time (most recently updated first).
   - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 1000 (maximum 999).
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
 
